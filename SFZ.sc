@@ -57,7 +57,7 @@ SFZ {
 				-4.0,
 				5
 			);
-			snd = snd * EnvGen.ar(Env.adsr(0.01, 0.3, 0.7, 0.1), gate, doneAction: 2);
+			snd = snd * EnvGen.ar(env, gate, doneAction: 2);
 			Out.ar(out, snd * amp);
 		}).send(server);
 	}
@@ -265,13 +265,13 @@ SFZ {
 						\buf, region.buffer,
 						\freq, num.midicps,
 						\pitchKeycenter, o.pitch_keycenter,
-						//\ampEnvDelay, o.ampeg_delay,
-						//\ampEnvStart, o.ampeg_start,
-						//\ampEnvAttack, o.ampeg_attack,
-						//\ampEnvHold, o.ampeg_hold,
-						//\ampEnvDelay, o.ampEnvDelay,
-						//\ampEnvSustain, o.ampEnvSustain,
-						//ampEnvRelease, o.ampEnvRelease
+						\ampEnvDelay, o.ampeg_delay,
+						\ampEnvStart, o.ampeg_start,
+						\ampEnvAttack, o.ampeg_attack,
+						\ampEnvHold, o.ampeg_hold,
+						\ampEnvDecay, o.ampeg_decay,
+						\ampEnvSustain, o.ampeg_sustain,
+						\ampEnvRelease, o.ampeg_release
 					]));
 				};
 			};
