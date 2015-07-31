@@ -57,7 +57,7 @@ SFZ {
 				-4.0,
 				5
 			);
-			//snd = snd * EnvGen.ar(env, gate, doneAction: 2);
+			snd = snd * EnvGen.ar(Env.adsr(0.01, 0.3, 0.7, 0.1), gate, doneAction: 2);
 			Out.ar(out, snd * amp);
 		}).send(server);
 	}
@@ -261,7 +261,7 @@ SFZ {
 				if ((o.lochan <= chan) and: { chan <= o.hichan }
 					and: { o.lokey <= num } and: { num <= o.hikey }
 					and: { o.lovel <= vel } and: { vel <= o.hivel }) {
-					Synth(\sfzSample, [
+					node.add(Synth(\sfzSample, [
 						\buf, region.buffer,
 						\freq, num.midicps,
 						\pitchKeycenter, o.pitch_keycenter,
@@ -271,8 +271,8 @@ SFZ {
 						//\ampEnvHold, o.ampeg_hold,
 						//\ampEnvDelay, o.ampEnvDelay,
 						//\ampEnvSustain, o.ampEnvSustain,
-						\//ampEnvRelease, o.ampEnvRelease
-					]);
+						//ampEnvRelease, o.ampEnvRelease
+					]));
 				};
 			};
 		});
@@ -379,7 +379,7 @@ SFZGroup : SFZRegion {
 
 SFZNode {
 
-	var synths;
+	var <synths;
 	var <parent;
 
 	*new { |parent|
@@ -395,7 +395,7 @@ SFZNode {
 	}
 
 	release {
-		parent.server.sendBundle(nil, {
+		parent.server.makeBundle(nil, {
 			synths.do { |synth|
 				synth.set(\gate, 0);
 			};
@@ -403,7 +403,7 @@ SFZNode {
 	}
 
 	free {
-		parent.server.sendBundle(nil, {
+		parent.server.makeBundle(nil, {
 			synths.do { |synth|
 				synth.free;
 			};
