@@ -1,15 +1,21 @@
 SFZ {
+	var <server;
 	var <lineNo, curHeader, context, curRegion, curGroup;
+	var <sfzPath, <sfzDir;
 	var <groups;
-	var <opcodes;
-
 	var opcodeSpecs, specialOpcodes;
+	var <opcodes;
+	var <buffers;
+	var <nodes;
 
-	*new {
-		^super.new.init;
+	*new { arg path, server;
+		^super.new.init(path, server);
 	}
 
-	init {
+	init { |path, argServer|
+		sfzPath = path;
+		server = argServer ? Server.default;
+
 		groups = [];
 
 		opcodes = ();
@@ -25,6 +31,35 @@ SFZ {
 		opcodeSpecs.keysValuesDo { |opcode, spec|
 			opcodes[opcode] = spec[1];
 		};
+
+		if (path.notNil) {
+			sfzDir = PathName(sfzPath).pathOnly;
+			opcodes.default_path = PathName(sfzPath).pathOnly;
+		};
+
+		SynthDef(\sfzSample, {
+			|
+				out = 0, buf, amp = 0.5, gate = 1,
+				freq = 440, pitchKeycenter = 60,
+				ampEnvDelay = 0,
+				ampEnvStart = 0,
+				ampEnvAttack = 0,
+				ampEnvHold = 0,
+				ampEnvDecay = 0,
+				ampEnvSustain = 100,
+				ampEnvRelease = 0
+			|
+			var snd, env;
+			snd = PlayBuf.ar(1, buf, BufRateScale.kr(buf) * freq / pitchKeycenter.midicps);
+			env = Env(
+				[0, 0, ampEnvStart / 100, 1, 1, ampEnvSustain / 100, 0],
+				[ampEnvDelay, 0, ampEnvAttack, ampEnvHold, ampEnvDecay, ampEnvRelease],
+				-4.0,
+				5
+			);
+			//snd = snd * EnvGen.ar(env, gate, doneAction: 2);
+			Out.ar(out, snd * amp);
+		}).send(server);
 	}
 
 	// specs take on the form [type, default, lo, hi]
@@ -43,14 +78,14 @@ SFZ {
 				value.asInteger;
 			}
 			{ \float } {
-				if ("^[-+]?\\d+(\\.\\d*)?$".matchRegexp(value).not) {
+				if ("^[-+]?\\d+(\\.\\d*)?$".matchRegexp(value.toLower).not) {
 					^Error("Bad opcode value '%' on line %. Expected a float.".format(value, lineNo)).throw;
 				};
 				value.asFloat;
 			}
 			{ \note } {
 				var match;
-				match = value.findRegexp("^([a-g])([b#]?)([-+]?\\d+)$");
+				match = value.toLower.findRegexp("^([a-g])([b#]?)([-+]?\\d+)$");
 				if (match.isEmpty) {
 					if ("^[-+]?\\d+$".matchRegexp(value)) {
 						value.asInteger;
@@ -76,14 +111,22 @@ SFZ {
 		^value;
 	}
 
-	addGroup { |group|
+	addGroup {
+		var group = SFZGroup(this);
 		groups = groups.add(group);
+		^group;
 	}
 
-	parse { |sfzString|
+	parse {
+		File.use(sfzPath, "r", { |f|
+			this.parseString(f.readAllString);
+		});
+	}
+
+	parseString { |sfzString|
 
 		// Split into lines
-		sfzString.split($\n).do { |line, i|
+		sfzString.replace("\r\n", "\n").split($\n).do { |line, i|
 
 			lineNo = i + 1;
 
@@ -92,26 +135,28 @@ SFZ {
 				line = line[..line.find("//") - 1];
 			};
 
-			line = line.trim;
+			// Simple lexer
+			while { line.notEmpty } {
+				var match;
+				case
+				// whitespace
+				{ match = line.findRegexp("^\\s+"); match.notEmpty } {
+					// do nothing
+				}
+				// headers
+				{ match = line.findRegexp("^<(\\w+)>"); match.notEmpty } {
+					this.parseHeader(match[1][1].asSymbol);
+				}
+				// opcodes extend to the end of the line
+				// The original SFZ format made a terrible decision to allow both spaces in opcodes
+				// and multiple opcodes on the same line.
+				{ match = line.findRegexp("^(\\w+)=(.*)"); match.notEmpty } {
+					this.parseOpcode(match[1][1], match[2][1]);
+				}
+				{ ^Error("Syntax error on line %".format(lineNo)).throw; };
 
-			if (line.notEmpty) {
-
-				if ((line.first == $<) and: { line.last == $> }) {
-					var header = line[1..line.size - 2];
-					this.parseHeader(header.asSymbol);
-				} {
-
-					if (line.find("=").notNil) {
-						var pos = line.find("=");
-						var opcode = line[..pos - 1];
-						var value = line[pos + 1..];
-						this.parseOpcode(opcode, value);
-					} {
-						^Error("Syntax error on line %".format(lineNo)).throw;
-					};
-
-				};
-
+				// Remove the matched characters at the beginning of the string
+				line = line[match[0][1].size..];
 			};
 
 		};
@@ -130,26 +175,23 @@ SFZ {
 			}
 
 			{ \group } {
-				context = SFZGroup(this);
-				this.addGroup(context);
+				context = this.addGroup;
 				curGroup = context;
 				curRegion = nil;
 			}
 
 			{ \region } {
 				if (curGroup.isNil) {
-					curGroup = SFZGroup(this);
-					this.addGroup(curGroup);
+					curGroup = this.addGroup;
 				};
-				context = SFZRegion(this);
+				context = curGroup.addRegion;
 				curRegion = context;
-				curGroup.addRegion(context);
 			};
 
 			curHeader = header;
 
 		} {
-			^Error("Unrecognized header <%> on line %".format(header, lineNo)).throw;
+			^Error("Unrecognized header <%> on line %.".format(header, lineNo)).throw;
 		};
 
 	}
@@ -172,37 +214,119 @@ SFZ {
 			};
 		};
 	}
+
+	regionsDo { |cb|
+		groups.do { |group|
+			group.regions.do { |region|
+				cb.value(region);
+			};
+		};	
+	}
+
+	loadBuffers { |action|
+		var makeBuf = { |path, cb| var b = Buffer.read(server, path, action: cb); b; };
+		var regionsByPath = Dictionary();
+		var bufCount, bufsDone;
+		buffers = Dictionary();
+
+		this.regionsDo { |region|
+			var path = opcodes.default_path +/+ region.opcodes.sample;
+			region.path = path;
+			if (regionsByPath[path].isNil) { regionsByPath[path] = []; };
+			regionsByPath[path] = regionsByPath[path].add(region);
+		};
+
+		bufCount = regionsByPath.keys.size;
+		bufsDone = 0;
+		regionsByPath.keysValuesDo { |path, regions|
+			buffers[path] = makeBuf.value(path, { |buf|
+				bufsDone = bufsDone + 1;
+				if (bufsDone >= bufCount) {
+					if (action.notNil) {
+						action.value;
+					};
+				};
+			});
+			regions.do { |region|
+				region.buffer = buffers[path];
+			};
+		};
+	}
+
+	play { |vel, num, chan|
+		var node = SFZNode(this);
+		server.makeBundle(nil, {
+			this.regionsDo { |region|
+				var o = region.opcodes;
+				if ((o.lochan <= chan) and: { chan <= o.hichan }
+					and: { o.lokey <= num } and: { num <= o.hikey }
+					and: { o.lovel <= vel } and: { vel <= o.hivel }) {
+					Synth(\sfzSample, [
+						\buf, region.buffer,
+						\freq, num.midicps,
+						\pitchKeycenter, o.pitch_keycenter,
+						//\ampEnvDelay, o.ampeg_delay,
+						//\ampEnvStart, o.ampeg_start,
+						//\ampEnvAttack, o.ampeg_attack,
+						//\ampEnvHold, o.ampeg_hold,
+						//\ampEnvDelay, o.ampEnvDelay,
+						//\ampEnvSustain, o.ampEnvSustain,
+						\//ampEnvRelease, o.ampEnvRelease
+					]);
+				};
+			};
+		});
+		^node;
+	}
+
+	free {
+		buffers.values.do { |buf|
+			buf.free;
+		};
+	}
 }
 
 SFZRegion {
 
 	var <parent;
 	var <opcodes;
-
 	var opcodeSpecs, specialOpcodes;
+	var <>path;
+	var <>buffer;
 
-	*new { |parent|
-		^super.new.init(parent);
+	*new { |parent, opcodes = nil|
+		^super.new.init(parent, opcodes);
 	}
 
-	init { |argParent|
+	init { |argParent, argOpcodes|
 
 		parent = argParent;
 
-		opcodes = ();
+		opcodes = if (argOpcodes.isNil) { () } { argOpcodes.copy };
 
 		opcodeSpecs = (
-			sample: [\string, nil],
 			lochan: [\int, 1, 1, 16],
 			hichan: [\int, 16, 1, 16],
 			lokey: [\note, 0, 0, 127],
 			hikey: [\note, 127, 0, 127],
 			pitch_keycenter: [\note, 60, 0, 127],
 			lovel: [\int, 0, 0, 127],
-			hivel: [\int, 127, 0, 127]
+			hivel: [\int, 127, 0, 127],
+
+			ampeg_delay: [\float, 0.0, 0.0, 100.0],
+			ampeg_start: [\float, 0.0, 0.0, 100.0],
+			ampeg_attack: [\float, 0.0, 0.0, 100.0],
+			ampeg_hold: [\float, 0.0, 0.0, 100.0],
+			ampeg_decay: [\float, 0.0, 0.0, 100.0],
+			ampeg_sustain: [\float, 100.0, 0.0, 100.0],
+			ampeg_release: [\float, 0.0, 0.0, 100.0]
 		);
 
 		specialOpcodes = (
+			sample: { |value|
+				// Many older soundfonts use backslashed directories
+				opcodes.sample = value.replace("\\", "/");
+			},
 			key: { |value|
 				value = SFZ.validate([\note, nil, 0, 127], value, parent.lineNo);
 				opcodes.lokey = value;
@@ -212,12 +336,13 @@ SFZRegion {
 		);
 
 		opcodeSpecs.keysValuesDo { |opcode, spec|
-			opcodes[opcode] = spec[1];
+			if (opcodes[opcode].isNil) {
+				opcodes[opcode] = spec[1];
+			};
 		};
 	}
 
 	setOpcode { |opcode, value|
-
 		if (opcodeSpecs[opcode].notNil) {
 			value = SFZ.validate(opcodeSpecs[opcode], value, parent.lineNo);
 			opcodes[opcode] = value;
@@ -236,13 +361,53 @@ SFZGroup : SFZRegion {
 
 	var <regions;
 
-	init { |argParent|
-		parent = argParent;
+	*new { |parent|
+		^super.new.init(parent).groupInit;
+	}
+
+	groupInit {
 		regions = [];
 	}
 
-	addRegion { |region|
+	addRegion {
+		var region = SFZRegion(parent, opcodes);
 		regions = regions.add(region);
+		^region;
+	}
+
+}
+
+SFZNode {
+
+	var synths;
+	var <parent;
+
+	*new { |parent|
+		^super.new.init(parent);
+	}
+
+	init { |argParent|
+		parent = argParent;
+	}
+
+	add { |synth|
+		synths = synths.add(synth);
+	}
+
+	release {
+		parent.server.sendBundle(nil, {
+			synths.do { |synth|
+				synth.set(\gate, 0);
+			};
+		});
+	}
+
+	free {
+		parent.server.sendBundle(nil, {
+			synths.do { |synth|
+				synth.free;
+			};
+		});
 	}
 
 }
