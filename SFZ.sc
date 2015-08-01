@@ -242,9 +242,7 @@ SFZ {
 				if ((o.lochan <= chan) and: { chan <= o.hichan }
 					and: { o.lokey <= num } and: { num <= o.hikey }
 					and: { o.lovel <= vel } and: { vel <= o.hivel }) {
-					node.add(Synth(region.defName, [
-						\freq, (num + o.transpose + (o.tune / 100)).midicps
-					]));
+					node.add(region.play(vel, num));
 				};
 			};
 		});
@@ -297,7 +295,16 @@ SFZRegion {
 			ampeg_hold: [\float, 0.0, 0.0, 100.0],
 			ampeg_decay: [\float, 0.0, 0.0, 100.0],
 			ampeg_sustain: [\float, 100.0, 0.0, 100.0],
-			ampeg_release: [\float, 0.0, 0.0, 100.0]
+			ampeg_release: [\float, 0.0, 0.0, 100.0],
+
+			pitcheg_delay: [\float, 0.0, 0.0, 100.0],
+			pitcheg_start: [\float, 0.0, 0.0, 100.0],
+			pitcheg_attack: [\float, 0.0, 0.0, 100.0],
+			pitcheg_hold: [\float, 0.0, 0.0, 100.0],
+			pitcheg_decay: [\float, 0.0, 0.0, 100.0],
+			pitcheg_sustain: [\float, 100.0, 0.0, 100.0],
+			pitcheg_release: [\float, 0.0, 0.0, 100.0],
+			pitcheg_depth: [\int, 0, -12000, 12000]
 		);
 
 		specialOpcodes = (
@@ -333,6 +340,46 @@ SFZRegion {
 		};
 	}
 
+	*env { |delay, start, attack, hold, decay, sustain, release|
+		^Env(
+			[0, 0, start / 100, 1, 1, sustain / 100, 0],
+			[delay, 0, attack, hold, decay, release],
+			-4.0,
+			5
+		);
+	}
+
+	ar { |freq, gate|
+		var o, snd;
+		o = opcodes;
+		if (o.pitcheg_depth != 0) {
+			freq = freq.cpsmidi;
+			freq = freq +
+				((o.pitcheg_depth / 100) * EnvGen.kr(SFZRegion.env(
+					o.pitcheg_delay,
+					o.pitcheg_start,
+					o.pitcheg_attack,
+					o.pitcheg_hold,
+					o.pitcheg_decay,
+					o.pitcheg_sustain,
+					o.pitcheg_release
+				), gate));
+			freq = freq.midicps;
+		};
+		snd = PlayBuf.ar(1, buffer, BufRateScale.kr(buffer) * freq / o.pitch_keycenter.midicps);
+		snd = snd * EnvGen.ar(SFZRegion.env(
+			o.ampeg_delay,
+			o.ampeg_start,
+			o.ampeg_attack,
+			o.ampeg_hold,
+			o.ampeg_decay,
+			o.ampeg_sustain,
+			o.ampeg_release
+		), gate, doneAction: 2);
+		snd = snd * o.volume.dbamp;
+		^snd;
+	}
+
 	makeSynthDef {
 		var o = opcodes;
 
@@ -340,19 +387,15 @@ SFZRegion {
 
 		SynthDef(defName, {
 			|out = 0, amp = 0.5, gate = 1, freq = 440|
-			var snd, env;
-			snd = PlayBuf.ar(1, buffer, BufRateScale.kr(buffer) * freq / o.pitch_keycenter.midicps);
-			env = Env(
-				[0, 0, o.ampeg_start / 100, 1, 1, o.ampeg_sustain / 100, 0],
-				[o.ampeg_delay, 0, o.ampeg_attack, o.ampeg_hold, o.ampeg_decay, o.ampeg_release],
-				-4.0,
-				5
-			);
-			snd = snd * EnvGen.ar(env, gate, doneAction: 2);
-			snd = snd * o.volume.dbamp;
-			Out.ar(out, snd * amp);
+			Out.ar(out, this.ar(freq, gate) * amp);
 		}).send(parent.server);
+	}
 
+	play { |vel, num|
+		var o = opcodes;
+		^Synth(defName, [
+			\freq, (num + o.transpose + (o.tune / 100)).midicps
+		]);
 	}
 
 }
