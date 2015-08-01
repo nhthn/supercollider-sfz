@@ -36,30 +36,6 @@ SFZ {
 			sfzDir = PathName(sfzPath).pathOnly;
 			opcodes.default_path = PathName(sfzPath).pathOnly;
 		};
-
-		SynthDef(\sfzSample, {
-			|
-				out = 0, buf, amp = 0.5, gate = 1,
-				freq = 440, pitchKeycenter = 60,
-				ampEnvDelay = 0,
-				ampEnvStart = 0,
-				ampEnvAttack = 0,
-				ampEnvHold = 0,
-				ampEnvDecay = 0,
-				ampEnvSustain = 100,
-				ampEnvRelease = 0
-			|
-			var snd, env;
-			snd = PlayBuf.ar(1, buf, BufRateScale.kr(buf) * freq / pitchKeycenter.midicps);
-			env = Env(
-				[0, 0, ampEnvStart / 100, 1, 1, ampEnvSustain / 100, 0],
-				[ampEnvDelay, 0, ampEnvAttack, ampEnvHold, ampEnvDecay, ampEnvRelease],
-				-4.0,
-				5
-			);
-			snd = snd * EnvGen.ar(env, gate, doneAction: 2);
-			Out.ar(out, snd * amp);
-		}).send(server);
 	}
 
 	// specs take on the form [type, default, lo, hi]
@@ -223,7 +199,7 @@ SFZ {
 		};	
 	}
 
-	loadBuffers { |action|
+	prepare { |action|
 		var makeBuf = { |path, cb| var b = Buffer.read(server, path, action: cb); b; };
 		var regionsByPath = Dictionary();
 		var bufCount, bufsDone;
@@ -242,6 +218,11 @@ SFZ {
 			buffers[path] = makeBuf.value(path, { |buf|
 				bufsDone = bufsDone + 1;
 				if (bufsDone >= bufCount) {
+
+					this.regionsDo { |region|
+						region.makeSynthDef;
+					};
+
 					if (action.notNil) {
 						action.value;
 					};
@@ -261,17 +242,8 @@ SFZ {
 				if ((o.lochan <= chan) and: { chan <= o.hichan }
 					and: { o.lokey <= num } and: { num <= o.hikey }
 					and: { o.lovel <= vel } and: { vel <= o.hivel }) {
-					node.add(Synth(\sfzSample, [
-						\buf, region.buffer,
-						\freq, num.midicps,
-						\pitchKeycenter, o.pitch_keycenter,
-						\ampEnvDelay, o.ampeg_delay,
-						\ampEnvStart, o.ampeg_start,
-						\ampEnvAttack, o.ampeg_attack,
-						\ampEnvHold, o.ampeg_hold,
-						\ampEnvDecay, o.ampeg_decay,
-						\ampEnvSustain, o.ampeg_sustain,
-						\ampEnvRelease, o.ampeg_release
+					node.add(Synth(region.defName, [
+						\freq, (num + o.transpose + (o.tune / 100)).midicps
 					]));
 				};
 			};
@@ -293,6 +265,7 @@ SFZRegion {
 	var opcodeSpecs, specialOpcodes;
 	var <>path;
 	var <>buffer;
+	var <defName;
 
 	*new { |parent, opcodes = nil|
 		^super.new.init(parent, opcodes);
@@ -309,9 +282,14 @@ SFZRegion {
 			hichan: [\int, 16, 1, 16],
 			lokey: [\note, 0, 0, 127],
 			hikey: [\note, 127, 0, 127],
-			pitch_keycenter: [\note, 60, 0, 127],
 			lovel: [\int, 0, 0, 127],
 			hivel: [\int, 127, 0, 127],
+
+			transpose: [\int, 0, -127, 127],
+			tune: [\int, 0, -100, 100],
+			pitch_keycenter: [\note, 60, 0, 127],
+
+			volume: [\float, 0.0, -144, 6],
 
 			ampeg_delay: [\float, 0.0, 0.0, 100.0],
 			ampeg_start: [\float, 0.0, 0.0, 100.0],
@@ -353,6 +331,28 @@ SFZRegion {
 				^Error("Unrecognized region opcode '%' on line %.".format(opcode, parent.lineNo)).throw;
 			};
 		};
+	}
+
+	makeSynthDef {
+		var o = opcodes;
+
+		defName = ("sfzSample-" ++ ({ "0123456789abcdefghijklmnopqrstuvwxyz".choose }!32).join("")).asSymbol;
+
+		SynthDef(defName, {
+			|out = 0, amp = 0.5, gate = 1, freq = 440|
+			var snd, env;
+			snd = PlayBuf.ar(1, buffer, BufRateScale.kr(buffer) * freq / o.pitch_keycenter.midicps);
+			env = Env(
+				[0, 0, o.ampeg_start / 100, 1, 1, o.ampeg_sustain / 100, 0],
+				[o.ampeg_delay, 0, o.ampeg_attack, o.ampeg_hold, o.ampeg_decay, o.ampeg_release],
+				-4.0,
+				5
+			);
+			snd = snd * EnvGen.ar(env, gate, doneAction: 2);
+			snd = snd * o.volume.dbamp;
+			Out.ar(out, snd * amp);
+		}).send(parent.server);
+
 	}
 
 }
