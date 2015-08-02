@@ -45,19 +45,30 @@ SFZ {
 
 	*validate { |spec, value, lineNo=0|
 
+		var validateRange;
+
+		validateRange = { |value|
+			if (spec[2].notNil) {
+				if (value < spec[2] or: { value > spec[3] }) {
+					^Error("Opcode value '%' out of range on line %. Expected range: % to %".format(value, lineNo, spec[2], spec[3])).throw;
+				};
+			};
+			value;
+		};
+
 		value = switch (spec[0])
 			{ \string } { value }
 			{ \int } {
 				if ("^[-+]?\\d+$".matchRegexp(value).not) {
 					^Error("Bad opcode value '%' on line %. Expected an integer.".format(value, lineNo)).throw;
 				};
-				value.asInteger;
+				validateRange.(value.asInteger);
 			}
 			{ \float } {
 				if ("^[-+]?\\d+(\\.\\d*)?$".matchRegexp(value.toLower).not) {
 					^Error("Bad opcode value '%' on line %. Expected a float.".format(value, lineNo)).throw;
 				};
-				value.asFloat;
+				validateRange.(value.asFloat);
 			}
 			{ \note } {
 				var match;
@@ -76,13 +87,12 @@ SFZ {
 					octave = match[3][1].asInteger;
 					octave + 1 * 12 + noteName + alteration;
 				};
+			}
+			{ \symbol } {
+				if (spec[2].includes(value.asSymbol).not) {
+					^Error("Bad opcode value '%' on line %. Expected one of %.".format(value, lineNo, spec[2])).throw;
+				};
 			};
-
-		if (spec[2].notNil) {
-			if (value < spec[2] or: { value > spec[3] }) {
-				^Error("Opcode value '%' out of range on line %. Expected range: % to %".format(value, lineNo, spec[2], spec[3])).throw;
-			};
-		};
 
 		^value;
 	}
@@ -315,7 +325,11 @@ SFZRegion {
 			pitchlfo_delay: [\float, 0.0, 0.0, 100.0],
 			pitchlfo_fade: [\float, 0.0, 0.0, 100.0],
 			pitchlfo_freq: [\float, 0.0, 0.0, 20.0],
-			pitchlfo_depth: [\int, 0, -1200, 1200]
+			pitchlfo_depth: [\int, 0, -1200, 1200],
+
+			fil_type: [\symbol, \lpf_2p, [\lpf_1p, \hpf_1p, \lpf_2p, \hpf_2p, \bpf_2p, \brf_2p]],
+			cutoff: [\float, nil, 0, parent.server.sampleRate * 0.5],
+			resonance: [\float, 0, 0, 40]
 		);
 
 		specialOpcodes = (
@@ -336,7 +350,11 @@ SFZRegion {
 				opcodes[opcode] = spec[1];
 			};
 		};
+
+		this.initGroup;
 	}
+
+	initGroup { }
 
 	setOpcode { |opcode, value|
 		if (opcodeSpecs[opcode].notNil) {
@@ -365,7 +383,7 @@ SFZRegion {
 	}
 
 	ar { |freq, gate|
-		var o, snd, autoEnv;
+		var o, snd, autoEnv, autoLfo;
 		o = opcodes;
 		
 		freq = freq.cpsmidi;
@@ -375,19 +393,22 @@ SFZRegion {
 			SFZRegion.dahdsr(*names.collect { |name| o[(prefix ++ \_ ++ name).asSymbol] });
 		};
 
+		autoLfo = { |prefix|
+			var names = [\delay, \fade, \freq];
+			SFZRegion.lfo(*names.collect { |name| o[(prefix ++ \_ ++ name).asSymbol] });
+		};
+
 		if (o.pitcheg_depth != 0) {
 			freq = freq +
 				((o.pitcheg_depth / 100) * EnvGen.kr(autoEnv.(\pitcheg), gate));
 		};
 		if (o.pitchlfo_depth != 0) {
 			freq = freq +
-				((o.pitchlfo_depth / 100) * SFZRegion.lfo(
-					o.pitchlfo_delay,
-					o.pitchlfo_fade,
-					o.pitchlfo_freq
-				));
+				((o.pitchlfo_depth / 100) * autoLfo.(\pitchlfo));
 		};
+
 		freq = freq.midicps;
+
 		snd = PlayBuf.ar(1, buffer, BufRateScale.kr(buffer) * freq / o.pitch_keycenter.midicps);
 		snd = snd * EnvGen.ar(autoEnv.(\ampeg), gate, doneAction: 2);
 		snd = snd * o.volume.dbamp;
@@ -427,16 +448,13 @@ SFZGroup : SFZRegion {
 
 	var <regions;
 
-	*new { |parent|
-		^super.new.init(parent).groupInit;
-	}
-
-	groupInit {
+	initGroup {
 		regions = [];
 	}
 
 	addRegion {
-		var region = SFZRegion(parent, opcodes);
+		var region;
+		region = SFZRegion(parent, opcodes);
 		regions = regions.add(region);
 		^region;
 	}
