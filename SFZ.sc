@@ -200,11 +200,19 @@ SFZ {
 	}
 
 	prepare { |action|
-		var makeBuf = { |path, cb| var b = Buffer.read(server, path, action: cb); b; };
-		var regionsByPath = Dictionary();
+		var makeBuf;
+		var regionsByPath;
 		var bufCount, bufsDone;
+
+		server.serverRunning.not.if {
+			^Error("Server not booted").throw;
+		};
+
+		makeBuf = { |path, cb| var b = Buffer.read(server, path, action: cb); b; };
+		regionsByPath = Dictionary();
 		buffers = Dictionary();
 
+		// Group together regions by path so no duplicate buffers are loaded.
 		this.regionsDo { |region|
 			var path = opcodes.default_path +/+ region.opcodes.sample;
 			region.path = path;
@@ -212,17 +220,17 @@ SFZ {
 			regionsByPath[path] = regionsByPath[path].add(region);
 		};
 
+		// Asynchronously load all buffers -- yuck
 		bufCount = regionsByPath.keys.size;
 		bufsDone = 0;
 		regionsByPath.keysValuesDo { |path, regions|
 			buffers[path] = makeBuf.value(path, { |buf|
 				bufsDone = bufsDone + 1;
 				if (bufsDone >= bufCount) {
-
+					// Ugh, is this asynchronous too? goddamnit
 					this.regionsDo { |region|
 						region.makeSynthDef;
 					};
-
 					if (action.notNil) {
 						action.value;
 					};
@@ -238,11 +246,9 @@ SFZ {
 		var node = SFZNode(this);
 		server.makeBundle(nil, {
 			this.regionsDo { |region|
-				var o = region.opcodes;
-				if ((o.lochan <= chan) and: { chan <= o.hichan }
-					and: { o.lokey <= num } and: { num <= o.hikey }
-					and: { o.lovel <= vel } and: { vel <= o.hivel }) {
-					node.add(region.play(vel, num));
+				var synth = region.playIfMatch(vel, num, chan);
+				if (synth.notNil) {
+					node.add(synth);
 				};
 			};
 		});
@@ -304,7 +310,12 @@ SFZRegion {
 			pitcheg_decay: [\float, 0.0, 0.0, 100.0],
 			pitcheg_sustain: [\float, 100.0, 0.0, 100.0],
 			pitcheg_release: [\float, 0.0, 0.0, 100.0],
-			pitcheg_depth: [\int, 0, -12000, 12000]
+			pitcheg_depth: [\int, 0, -12000, 12000],
+
+			pitchlfo_delay: [\float, 0.0, 0.0, 100.0],
+			pitchlfo_fade: [\float, 0.0, 0.0, 100.0],
+			pitchlfo_freq: [\float, 0.0, 0.0, 20.0],
+			pitchlfo_depth: [\int, 0, -1200, 1200]
 		);
 
 		specialOpcodes = (
@@ -340,7 +351,7 @@ SFZRegion {
 		};
 	}
 
-	*env { |delay, start, attack, hold, decay, sustain, release|
+	*dahdsr { |delay, start, attack, hold, decay, sustain, release|
 		^Env(
 			[0, 0, start / 100, 1, 1, sustain / 100, 0],
 			[delay, 0, attack, hold, decay, release],
@@ -349,33 +360,36 @@ SFZRegion {
 		);
 	}
 
+	*lfo { |delay, fade, freq|
+		^SinOsc.kr(freq) * EnvGen.kr(Env([0, 0, 1], [delay, fade], 2));
+	}
+
 	ar { |freq, gate|
-		var o, snd;
+		var o, snd, autoEnv;
 		o = opcodes;
-		if (o.pitcheg_depth != 0) {
-			freq = freq.cpsmidi;
-			freq = freq +
-				((o.pitcheg_depth / 100) * EnvGen.kr(SFZRegion.env(
-					o.pitcheg_delay,
-					o.pitcheg_start,
-					o.pitcheg_attack,
-					o.pitcheg_hold,
-					o.pitcheg_decay,
-					o.pitcheg_sustain,
-					o.pitcheg_release
-				), gate));
-			freq = freq.midicps;
+		
+		freq = freq.cpsmidi;
+
+		autoEnv = { |prefix|
+			var names = [\delay, \start, \attack, \hold, \decay, \sustain, \release];
+			SFZRegion.dahdsr(*names.collect { |name| o[(prefix ++ \_ ++ name).asSymbol] });
 		};
+
+		if (o.pitcheg_depth != 0) {
+			freq = freq +
+				((o.pitcheg_depth / 100) * EnvGen.kr(autoEnv.(\pitcheg), gate));
+		};
+		if (o.pitchlfo_depth != 0) {
+			freq = freq +
+				((o.pitchlfo_depth / 100) * SFZRegion.lfo(
+					o.pitchlfo_delay,
+					o.pitchlfo_fade,
+					o.pitchlfo_freq
+				));
+		};
+		freq = freq.midicps;
 		snd = PlayBuf.ar(1, buffer, BufRateScale.kr(buffer) * freq / o.pitch_keycenter.midicps);
-		snd = snd * EnvGen.ar(SFZRegion.env(
-			o.ampeg_delay,
-			o.ampeg_start,
-			o.ampeg_attack,
-			o.ampeg_hold,
-			o.ampeg_decay,
-			o.ampeg_sustain,
-			o.ampeg_release
-		), gate, doneAction: 2);
+		snd = snd * EnvGen.ar(autoEnv.(\ampeg), gate, doneAction: 2);
 		snd = snd * o.volume.dbamp;
 		^snd;
 	}
@@ -396,6 +410,15 @@ SFZRegion {
 		^Synth(defName, [
 			\freq, (num + o.transpose + (o.tune / 100)).midicps
 		]);
+	}
+
+	playIfMatch { |vel, num, chan|
+		var o = opcodes;
+		^if ((o.lochan <= chan) and: { chan <= o.hichan }
+			and: { o.lokey <= num } and: { num <= o.hikey }
+			and: { o.lovel <= vel } and: { vel <= o.hivel }) {
+			this.play(vel, num);
+		} { nil };
 	}
 
 }
