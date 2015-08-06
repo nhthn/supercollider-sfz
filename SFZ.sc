@@ -1,7 +1,7 @@
 SFZ {
 	var <server;
 	var <lineNo, curHeader, context, curRegion, curGroup;
-	var <sfzPath, <sfzDir;
+	var <sfzPath;
 	var <groups;
 	var opcodeSpecs, specialOpcodes;
 	var <opcodes;
@@ -33,7 +33,6 @@ SFZ {
 		};
 
 		if (path.notNil) {
-			sfzDir = PathName(sfzPath).pathOnly;
 			opcodes.default_path = PathName(sfzPath).pathOnly;
 		};
 	}
@@ -252,7 +251,7 @@ SFZ {
 		};
 	}
 
-	play { |vel, num, chan|
+	play { |vel = 64, num = 60, chan = 1|
 		var node = SFZNode(this);
 		server.makeBundle(nil, {
 			this.regionsDo { |region|
@@ -410,6 +409,17 @@ SFZRegion {
 		freq = freq.midicps;
 
 		snd = PlayBuf.ar(1, buffer, BufRateScale.kr(buffer) * freq / o.pitch_keycenter.midicps);
+
+		if (o.cutoff.notNil) {
+			switch (o.fil_type)
+			{ \lpf_1p } { snd = OnePole.ar(snd, 1 - (o.cutoff / parent.server.sampleRate)); }
+			{ \hpf_1p } { snd = OnePole.ar(snd, (o.cutoff / parent.server.sampleRate).neg); }
+			{ \lpf_2p } { snd = RLPF.ar(snd, o.cutoff, o.resonance.dbamp.reciprocal); }
+			{ \hpf_2p } { snd = RHPF.ar(snd, o.cutoff, o.resonance.dbamp.reciprocal); }
+			{ \bpf_1p } { snd = BPF.ar(snd, o.cutoff, o.resonance.dbamp.reciprocal); }
+			{ \brf_2p } { snd = BRF.ar(snd, o.cutoff, o.resonance.dbamp.reciprocal); };
+		};
+
 		snd = snd * EnvGen.ar(autoEnv.(\ampeg), gate, doneAction: 2);
 		snd = snd * o.volume.dbamp;
 		^snd;
@@ -423,6 +433,7 @@ SFZRegion {
 		SynthDef(defName, {
 			|out = 0, amp = 0.5, gate = 1, freq = 440|
 			Out.ar(out, this.ar(freq, gate) * amp);
+			// Out.ar(out, Pan2.ar(this.ar(freq, gate), 0, amp));
 		}).send(parent.server);
 	}
 
