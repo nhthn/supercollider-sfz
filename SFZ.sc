@@ -48,9 +48,12 @@ SFZ {
 			seq_length: [\int, 1],
 			seq_position: [\int, 1],
 
+			loop_mode: [\symbol, \no_loop, [\no_loop, \one_shot]],
+
 			transpose: [\int, 0],
 			tune: [\int, 0],
 			pitch_keycenter: [\note, 60],
+			pitch_veltrack: [\int, 0],
 
 			volume: [\float, 0.0],
 
@@ -79,6 +82,7 @@ SFZ {
 			fil_type: [\symbol, \lpf_2p, [\lpf_1p, \hpf_1p, \lpf_2p, \hpf_2p, \bpf_2p, \brf_2p]],
 			cutoff: [\float, nil],
 			resonance: [\float, 0],
+			fil_veltrack: [\int, 0],
 
 			sample: { |opcodesDict, value, lineNo|
 				// Many soundfonts use backslashed directories
@@ -435,9 +439,12 @@ SFZRegion {
 		^SinOsc.kr(freq) * EnvGen.kr(Env([0, 0, 1], [delay, fade], 2));
 	}
 
-	ar { |freq, gate|
-		var o, snd, autoEnv, autoLfo;
+	ar { |freq, vel, gate|
+		var o, note, snd, autoEnv, autoLfo, bufRate;
+		var normVel;
+
 		o = opcodes;
+		normVel = (vel / 127 - 0.5);
 
 		autoEnv = { |prefix|
 			var names = [\delay, \start, \attack, \hold, \decay, \sustain, \release];
@@ -449,36 +456,47 @@ SFZRegion {
 			SFZRegion.lfo(*names.collect { |name| o[(prefix ++ \_ ++ name).asSymbol] });
 		};
 
-		((o.pitcheg_depth != 0) or: { o.pitchlfo_depth != 0 }).if {
+		note = freq.cpsmidi;
 
-			var note = freq.cpsmidi;
-
-			if (o.pitcheg_depth != 0) {
-				note = note +
-					((o.pitcheg_depth / 100) * EnvGen.kr(autoEnv.(\pitcheg), gate));
-			};
-			if (o.pitchlfo_depth != 0) {
-				note = note +
-					((o.pitchlfo_depth / 100) * autoLfo.(\pitchlfo));
-			};
-
-			freq = note.midicps;
-
+		if (o.pitch_veltrack != 0) {
+			note = note + (normVel * (o.pitch_veltrack / 100));
+		};
+		if (o.pitcheg_depth != 0) {
+			note = note +
+				((o.pitcheg_depth / 100) * EnvGen.kr(autoEnv.(\pitcheg), gate));
+		};
+		if (o.pitchlfo_depth != 0) {
+			note = note +
+				((o.pitchlfo_depth / 100) * autoLfo.(\pitchlfo));
 		};
 
-		snd = PlayBuf.ar(1, buffer, BufRateScale.kr(buffer) * freq / o.pitch_keycenter.midicps);
+		freq = note.midicps;
+
+		bufRate = BufRateScale.kr(buffer) * freq / o.pitch_keycenter.midicps;
+
+		snd = PlayBuf.ar(buffer.numChannels, buffer, bufRate, doneAction: if(o.loop_mode == \one_shot, 0, 2));
 
 		if (o.cutoff.notNil) {
+			var cutoff = o.cutoff;
+
+			var cutoffNote = cutoff.cpsmidi;
+
+			if (o.fil_veltrack != 0) {
+				cutoffNote = cutoffNote + (normVel * (o.fil_veltrack / 100));
+			};
+
+			cutoff = cutoffNote.midicps;
+
 			switch (o.fil_type)
-			{ \lpf_1p } { snd = OnePole.ar(snd, 1 - (o.cutoff / parent.server.sampleRate)); }
-			{ \hpf_1p } { snd = OnePole.ar(snd, (o.cutoff / parent.server.sampleRate).neg); }
-			{ \lpf_2p } { snd = RLPF.ar(snd, o.cutoff, o.resonance.dbamp.reciprocal); }
-			{ \hpf_2p } { snd = RHPF.ar(snd, o.cutoff, o.resonance.dbamp.reciprocal); }
-			{ \bpf_2p } { snd = BPF.ar(snd, o.cutoff, o.resonance.dbamp.reciprocal); }
-			{ \brf_2p } { snd = BRF.ar(snd, o.cutoff, o.resonance.dbamp.reciprocal); };
+			{ \lpf_1p } { snd = OnePole.ar(snd, 1 - (cutoff / parent.server.sampleRate)); }
+			{ \hpf_1p } { snd = OnePole.ar(snd, (cutoff / parent.server.sampleRate).neg); }
+			{ \lpf_2p } { snd = RLPF.ar(snd, cutoff, o.resonance.dbamp.reciprocal); }
+			{ \hpf_2p } { snd = RHPF.ar(snd, cutoff, o.resonance.dbamp.reciprocal); }
+			{ \bpf_2p } { snd = BPF.ar(snd, cutoff, o.resonance.dbamp.reciprocal); }
+			{ \brf_2p } { snd = BRF.ar(snd, cutoff, o.resonance.dbamp.reciprocal); };
 		};
 
-		snd = snd * EnvGen.ar(autoEnv.(\ampeg), gate, doneAction: 2);
+		snd = snd * EnvGen.ar(autoEnv.(\ampeg), gate, doneAction: if(o.loop_mode == \one_shot, 2, 0));
 		snd = snd * o.volume.dbamp;
 		^snd;
 	}
@@ -489,8 +507,8 @@ SFZRegion {
 		defName = ("sfzSample-" ++ ({ "0123456789abcdefghijklmnopqrstuvwxyz".choose }!32).join("")).asSymbol;
 
 		SynthDef(defName, {
-			|out = 0, amp = 0.5, gate = 1, freq = 440|
-			Out.ar(out, this.ar(freq, gate) * amp);
+			|out = 0, amp = 0.5, gate = 1, freq = 440, vel = 64|
+			Out.ar(out, this.ar(freq, vel, gate) * amp);
 			// Out.ar(out, Pan2.ar(this.ar(freq, gate), 0, amp));
 		}).send(parent.server);
 	}
@@ -498,6 +516,7 @@ SFZRegion {
 	play { |vel, num|
 		var o = opcodes;
 		^Synth(defName, [
+			\vel, vel,
 			\freq, (num + o.transpose + (o.tune / 100)).midicps
 		]);
 	}
