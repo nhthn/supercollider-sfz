@@ -365,7 +365,7 @@ SFZ {
 		};
 	}
 
-	play { |vel = 64, num = 60, chan = 1|
+	noteOn { |vel = 64, num = 60, chan = 1|
 		var node = SFZNode(this);
 		server.makeBundle(nil, {
 			this.regionsDo { |region|
@@ -438,8 +438,6 @@ SFZRegion {
 	ar { |freq, gate|
 		var o, snd, autoEnv, autoLfo;
 		o = opcodes;
-		
-		freq = freq.cpsmidi;
 
 		autoEnv = { |prefix|
 			var names = [\delay, \start, \attack, \hold, \decay, \sustain, \release];
@@ -451,16 +449,22 @@ SFZRegion {
 			SFZRegion.lfo(*names.collect { |name| o[(prefix ++ \_ ++ name).asSymbol] });
 		};
 
-		if (o.pitcheg_depth != 0) {
-			freq = freq +
-				((o.pitcheg_depth / 100) * EnvGen.kr(autoEnv.(\pitcheg), gate));
-		};
-		if (o.pitchlfo_depth != 0) {
-			freq = freq +
-				((o.pitchlfo_depth / 100) * autoLfo.(\pitchlfo));
-		};
+		((o.pitcheg_depth != 0) or: { o.pitchlfo_depth != 0 }).if {
 
-		freq = freq.midicps;
+			var note = freq.cpsmidi;
+
+			if (o.pitcheg_depth != 0) {
+				note = note +
+					((o.pitcheg_depth / 100) * EnvGen.kr(autoEnv.(\pitcheg), gate));
+			};
+			if (o.pitchlfo_depth != 0) {
+				note = note +
+					((o.pitchlfo_depth / 100) * autoLfo.(\pitchlfo));
+			};
+
+			freq = note.midicps;
+
+		};
 
 		snd = PlayBuf.ar(1, buffer, BufRateScale.kr(buffer) * freq / o.pitch_keycenter.midicps);
 
