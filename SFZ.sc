@@ -65,6 +65,12 @@ SFZ {
 			ampeg_sustain: [\float, 100.0],
 			ampeg_release: [\float, 0.0],
 
+			ampeg_vel2delay: [\float, 0.0],
+			ampeg_vel2attack: [\float, 0.0],
+			ampeg_vel2hold: [\float, 0.0],
+			ampeg_vel2decay: [\float, 0.0],
+			ampeg_vel2release: [\float, 0.0],
+
 			pitcheg_delay: [\float, 0.0],
 			pitcheg_start: [\float, 0.0],
 			pitcheg_attack: [\float, 0.0],
@@ -73,6 +79,12 @@ SFZ {
 			pitcheg_sustain: [\float, 100.0],
 			pitcheg_release: [\float, 0.0],
 			pitcheg_depth: [\int, 0],
+
+			pitcheg_vel2delay: [\float, 0.0],
+			pitcheg_vel2attack: [\float, 0.0],
+			pitcheg_vel2hold: [\float, 0.0],
+			pitcheg_vel2decay: [\float, 0.0],
+			pitcheg_vel2release: [\float, 0.0],
 
 			pitchlfo_delay: [\float, 0.0],
 			pitchlfo_fade: [\float, 0.0],
@@ -444,11 +456,19 @@ SFZRegion {
 		var normVel;
 
 		o = opcodes;
-		normVel = (vel / 127 - 0.5);
+		normVel = vel / 127;
 
 		autoEnv = { |prefix|
 			var names = [\delay, \start, \attack, \hold, \decay, \sustain, \release];
-			SFZRegion.dahdsr(*names.collect { |name| o[(prefix ++ \_ ++ name).asSymbol] });
+			SFZRegion.dahdsr(*names.collect { |name|
+				((name == \start) or: { name == \sustain }).if {
+					o[(prefix ++ \_ ++ name).asSymbol]
+				} {
+					name.postln;
+					o[(prefix ++ \_ ++ name).asSymbol] +
+						(normVel * o[(prefix ++ \_vel2 ++ name).asSymbol])
+				};
+			});
 		};
 
 		autoLfo = { |prefix|
@@ -459,7 +479,7 @@ SFZRegion {
 		note = freq.cpsmidi;
 
 		if (o.pitch_veltrack != 0) {
-			note = note + (normVel * (o.pitch_veltrack / 100));
+			note = note + ((normVel - 0.5) * (o.pitch_veltrack / 100));
 		};
 		if (o.pitcheg_depth != 0) {
 			note = note +
@@ -482,10 +502,10 @@ SFZRegion {
 			var cutoffNote = cutoff.cpsmidi;
 
 			if (o.fil_veltrack != 0) {
-				cutoffNote = cutoffNote + (normVel * (o.fil_veltrack / 100));
+				cutoffNote = cutoffNote + ((normVel - 0.5) * (o.fil_veltrack / 100));
 			};
 
-			cutoff = cutoffNote.midicps;
+			cutoff = Clip.kr(cutoffNote.midicps, 0, parent.server.sampleRate * 0.5);
 
 			switch (o.fil_type)
 			{ \lpf_1p } { snd = OnePole.ar(snd, 1 - (cutoff / parent.server.sampleRate)); }
