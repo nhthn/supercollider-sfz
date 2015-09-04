@@ -113,8 +113,9 @@ SFZ {
 			};
 		};
 
-		if (path.notNil) {
+		sfzPath.notNil.if {
 			controlOpcodes.default_path = PathName(sfzPath).pathOnly;
+			this.parse;
 		};
 	}
 
@@ -304,7 +305,7 @@ SFZ {
 
 	regionsDo { |cb|
 		regions.do { |region|
-			cb.value;
+			cb.value(region);
 		};
 	}
 
@@ -323,7 +324,7 @@ SFZ {
 		this.regionsDo { |region|
 			var path = controlOpcodes.default_path +/+ region.opcodes.sample;
 			region.path = path;
-			if (regionsByPath[path].isNil) { regionsByPath[path] = []; };
+			regionsByPath[path].isNil.if { regionsByPath[path] = []; };
 			regionsByPath[path] = regionsByPath[path].add(region);
 		};
 
@@ -339,9 +340,10 @@ SFZ {
 				action.value;
 			} {
 				// Get all regions associated with this path
-				var regions = regions[path];
+				var regions = regionsByPath[path];
 				// Load the buffer
 				buffers[path] = Buffer.read(server, path, action: { |buf|
+					"Loaded buffer % of %".format(regionsByPath.size - paths.size, regionsByPath.size).postln;
 					// After this buffer is done, call loadBuffer again
 					loadBuffer.value(action);
 				});
