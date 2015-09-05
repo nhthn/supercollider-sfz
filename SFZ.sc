@@ -464,7 +464,6 @@ SFZRegion {
 				((name == \start) or: { name == \sustain }).if {
 					o[(prefix ++ \_ ++ name).asSymbol]
 				} {
-					name.postln;
 					o[(prefix ++ \_ ++ name).asSymbol] +
 						(normVel * o[(prefix ++ \_vel2 ++ name).asSymbol])
 				};
@@ -505,7 +504,7 @@ SFZRegion {
 				cutoffNote = cutoffNote + ((normVel - 0.5) * (o.fil_veltrack / 100));
 			};
 
-			cutoff = Clip.kr(cutoffNote.midicps, 0, parent.server.sampleRate * 0.5);
+			cutoff = Clip.kr(cutoffNote.midicps, 0, parent.server.sampleRate * 0.4);
 
 			switch (o.fil_type)
 			{ \lpf_1p } { snd = OnePole.ar(snd, 1 - (cutoff / parent.server.sampleRate)); }
