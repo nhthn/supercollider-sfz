@@ -22,13 +22,16 @@ SFZ {
 	classvar <controlOpcodes, <regionOpcodes;
 
 	var <server;
+	var <target;
 	var <lineNo, curHeader, context, curRegion;
 	var <sfzPath;
-	var globalOpcodes, groupOpcodes;
+	var badOpcodes;
+	var <globalOpcodes, <groupOpcodes;
 	var <controlOpcodes;
 	var <regions;
 	var <buffers;
 	var <nodes;
+	var <>outbus, <>amp;
 
 	*initClass {
 		controlOpcodes = (
@@ -109,13 +112,22 @@ SFZ {
 		);
 	}
 
-	*new { arg path, server;
-		^super.new.init(path, server);
+	*new { arg path, server, badOpcodes = \error;
+		^super.new.init(path, server, badOpcodes);
 	}
 
-	init { |path, argServer|
+	init { |path, argServer, argBadOpcodes|
 		sfzPath = path;
 		server = argServer ? Server.default;
+		target = server;
+		server.isKindOf(Group).if {
+			server = server.server; // lol
+		};
+		outbus = 0;
+		amp = 0.5;
+		badOpcodes = argBadOpcodes;
+
+		nodes = ();
 
 		regions = [];
 
@@ -149,7 +161,7 @@ SFZ {
 				value.asInteger;
 			}
 			{ \float } {
-				if ("^[-+]?\\d+(\\.\\d*)?$".matchRegexp(value.toLower).not) {
+				if ("^[-+]?(\\d+(\\.\\d*)?|\\.\\d+)$".matchRegexp(value.toLower).not) {
 					^Error("Bad opcode value '%' on line %. Expected a float.".format(value, lineNo)).throw;
 				};
 				value.asFloat;
@@ -176,6 +188,7 @@ SFZ {
 				if (spec[2].includes(value.asSymbol).not) {
 					^Error("Bad opcode value '%' on line %. Expected one of %.".format(value, lineNo, spec[2])).throw;
 				};
+				value.asSymbol;
 			};
 
 		^value;
@@ -302,7 +315,12 @@ SFZ {
 					spec.value(context, value);
 				};
 			} {
-				^Error("Unrecognized control opcode '%' on line %.".format(opcode, lineNo)).throw;
+				var errorStr = "Unrecognized control opcode '%' on line %.".format(opcode, lineNo);
+				(badOpcodes == \error).if {
+					^Error(errorStr).throw;
+				} {
+					^errorStr.warn;
+				};
 			};
 		} {
 			var spec = SFZ.regionOpcodes[opcode];
@@ -314,7 +332,12 @@ SFZ {
 					spec.value(context, value);
 				};
 			} {
-				^Error("Unrecognized control opcode '%' on line %.".format(opcode, lineNo)).throw;
+				var errorStr = "Unrecognized region opcode '%' on line %.".format(opcode, lineNo);
+				(badOpcodes == \error).if {
+					^Error(errorStr).throw;
+				} {
+					^errorStr.warn;
+				};
 			};
 		};
 	}
@@ -344,9 +367,11 @@ SFZ {
 			regionsByPath[path] = regionsByPath[path].add(region);
 		};
 
-		// Asynchronously load all buffers
+		// Get paths
 
 		paths = regionsByPath.keys.asArray;
+
+		// Asynchronously load all buffers
 
 		loadBuffer = { |action|
 			// Get the next path
@@ -391,7 +416,35 @@ SFZ {
 				};
 			};
 		});
+		nodes[chan].isNil.if {
+			nodes[chan] = ();
+		};
+		nodes[chan][num].isNil.if {
+			nodes[chan][num] = Set();
+		};
+		nodes[chan][num] = nodes[chan][num].add(node);
 		^node;
+	}
+
+	noteOff { |vel = 64, num = 60, chan = 1|
+		nodes[chan].notNil.if {
+			nodes[chan][num].notNil.if {
+				nodes[chan][num].do { |node|
+					node.release;
+				};
+				nodes[chan][num] = nil;
+			};
+		};
+	}
+
+	panic {
+		nodes.do { |chan|
+			chan.do { |nodes|
+				nodes.do { |node|
+					node.release;
+				};
+			};
+		};
 	}
 
 	free {
@@ -407,6 +460,7 @@ SFZRegion {
 
 	classvar <opcodeSpecs, <specialOpcodes;
 
+	var outbus;
 	var <parent;
 	var <opcodes;
 	var <>path;
@@ -424,6 +478,7 @@ SFZRegion {
 	init { |argParent, argOpcodes|
 
 		parent = argParent;
+		outbus = parent.outbus;
 
 		opcodes = if (argOpcodes.isNil) { () } { argOpcodes.copy };
 
@@ -492,8 +547,7 @@ SFZRegion {
 		freq = note.midicps;
 
 		bufRate = BufRateScale.kr(buffer) * freq / o.pitch_keycenter.midicps;
-
-		snd = PlayBuf.ar(buffer.numChannels, buffer, bufRate, doneAction: if(o.loop_mode == \one_shot, 0, 2));
+		snd = PlayBuf.ar(buffer.numChannels, buffer, bufRate, doneAction: if(o.loop_mode == \one_shot, 2, 0));
 
 		if (o.cutoff.notNil) {
 			var cutoff = o.cutoff;
@@ -515,7 +569,8 @@ SFZRegion {
 			{ \brf_2p } { snd = BRF.ar(snd, cutoff, o.resonance.dbamp.reciprocal); };
 		};
 
-		snd = snd * EnvGen.ar(autoEnv.(\ampeg), gate, doneAction: if(o.loop_mode == \one_shot, 2, 0));
+		snd = snd * EnvGen.ar(autoEnv.(\ampeg), if(o.loop_mode == \one_shot, 1, gate), doneAction: if(o.loop_mode == \one_shot, 0, 2));
+		snd = snd * (-20 * ((127**2) / (vel**2)).log).dbamp;
 		snd = snd * o.volume.dbamp;
 		^snd;
 	}
@@ -526,7 +581,7 @@ SFZRegion {
 		defName = ("sfzSample-" ++ ({ "0123456789abcdefghijklmnopqrstuvwxyz".choose }!32).join("")).asSymbol;
 
 		SynthDef(defName, {
-			|out = 0, amp = 0.5, gate = 1, freq = 440, vel = 64|
+			|out = 0, amp = 1.0, gate = 1, freq = 440, vel = 64|
 			Out.ar(out, this.ar(freq, vel, gate) * amp);
 			// Out.ar(out, Pan2.ar(this.ar(freq, gate), 0, amp));
 		}).send(parent.server);
@@ -535,9 +590,11 @@ SFZRegion {
 	play { |vel, num|
 		var o = opcodes;
 		^Synth(defName, [
+			\out, parent.outbus,
+			\amp, parent.amp,
 			\vel, vel,
 			\freq, (num + o.transpose + (o.tune / 100)).midicps
-		]);
+		], target: parent.server);
 	}
 
 	noteOn { |vel, num, chan|
