@@ -1,0 +1,52 @@
+TITLE:: SFZ
+summary:: SFZ sample player
+categories:: Quarks>SFZ
+
+DESCRIPTION::
+
+SFZ is an open text-based sample format originally created by rgc:audio. It supports features such as envelope generators, LFOs, filters, and equalization.
+
+The most thorough, freely available documentation for SFZ can be found at http://www.sfzformat.com/legacy/. Currently, SFZ appears to be a de facto standard.
+
+CLASSMETHODS::
+
+METHOD:: new
+Loads and parses the SFZ file. No buffers are loaded.
+
+ARGUMENT:: path
+The absolute path of the SFZ file. If the code:: default_path :: control opcode is not given, all paths will be relative to the location of this file.
+
+ARGUMENT:: server
+Server to play the samples on. If nil, code:: Server.default :: is assumed.
+
+ARGUMENT:: badOpcodes
+If this is set to code:: 'error' ::, an error will be thrown when an opcode is not recognized. Otherwise it will simply throw a warning.
+
+INSTANCEMETHODS::
+
+METHOD:: nodes
+List of SFZNodes associated with this player, grouped by channel and then note number.
+
+METHOD:: prepare
+Loads the sound file buffers.
+
+METHOD:: noteOn
+Send a note on message with the given velocity, number, and channel.
+
+METHOD:: buffers
+
+METHOD:: sfzPath
+The path of the sfz file.
+
+METHOD:: server
+The server that this player will play to.
+
+EXAMPLES::
+
+code::
+x = SFZ("/path/to/sfz/file.sfz");
+x.prepare { "done".postln };
+
+x.noteOn(64, 60);
+x.noteOff(64, 60);
+::
