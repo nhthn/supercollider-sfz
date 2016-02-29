@@ -45,8 +45,11 @@ EXAMPLES::
 
 code::
 x = SFZ("/path/to/sfz/file.sfz");
-x.prepare { "done".postln };
+x.prepare { "done".postln }; // load buffers
 
 x.noteOn(64, 60);
 x.noteOff(64, 60);
+
+// clean up
+x.free;
 ::
